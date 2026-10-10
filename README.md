@@ -6,7 +6,7 @@ LEDGERLENS is a Streamlit machine-learning prototype that uses exploratory analy
 
 ## Live Demo
 
-https://ledgerlens-e8hogpl88mynxsm2jfnw2.streamlit.app/
+https://ledgerlens-e8hoghpl88mynxsm2jfnw2.streamlit.app/
 
 ## Problem
 
