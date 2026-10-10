@@ -63,10 +63,10 @@ The base repository is intentionally a working baseline. Participants should:
 
 ### Open Challenges
 
-- **Easy:** [Audit anomaly results and establish evaluation baseline](https://github.com/radhikadhingra820-hue/LEDGERLENS/issues/1)
-- **Medium:** [Improve project feature engineering](https://github.com/radhikadhingra820-hue/LEDGERLENS/issues/2)
-- **Medium:** [Improve anomaly explanations with evidence](https://github.com/radhikadhingra820-hue/LEDGERLENS/issues/3)
-- **Hard:** [Compare anomaly-detection methods](https://github.com/radhikadhingra820-hue/LEDGERLENS/issues/4)
+- **Easy:** [Audit anomaly results and establish evaluation baseline](https://github.com/Geektoberfest/Geektoberfest-LEDGERLENS/issues/1)
+- **Medium:** [Improve project feature engineering](https://github.com/Geektoberfest/Geektoberfest-LEDGERLENS/issues/2)
+- **Medium:** [Improve anomaly explanations with evidence](https://github.com/Geektoberfest/Geektoberfest-LEDGERLENS/issues/3)
+- **Hard:** [Compare anomaly-detection methods](https://github.com/Geektoberfest/Geektoberfest-LEDGERLENS/issues/4)
 
 Anomalies are candidates for human review, not proof of fraud or misconduct. Since the starter dataset is synthetic, contributors should explain what their evaluation can and cannot establish.
 
