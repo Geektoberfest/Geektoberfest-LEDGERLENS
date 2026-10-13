@@ -50,6 +50,14 @@ python -m pip install -r requirements.txt
 python -m streamlit run app.py
 ```
 
+## Baseline audit
+
+`baseline_audit.py` reproduces the current Isolation Forest baseline and writes `docs/baseline_report.md` (anomaly count/rate, flagged vs unflagged features, representative cases, seed and contamination sensitivity, limitations) plus `docs/baseline_flagged_projects.csv`. It does not change the detector.
+
+```
+python baseline_audit.py
+```
+
 ## Competition Workflow
 
 The base repository is intentionally a working baseline. Participants should:
@@ -75,6 +83,7 @@ Anomalies are candidates for human review, not proof of fraud or misconduct. Sin
 ```
 LEDGERLENS/
 ├── app.py
+├── baseline_audit.py
 ├── model.py
 ├── sample_projects.csv
 ├── requirements.txt
@@ -82,6 +91,10 @@ LEDGERLENS/
 ├── PRESENTATION.md
 ├── LICENSE
 ├── .gitignore
+├── docs/
+│   ├── baseline_flagged_projects.csv
+│   └── baseline_report.md
 └── tests/
+    ├── test_baseline_audit.py
     └── test_model.py
 ```
