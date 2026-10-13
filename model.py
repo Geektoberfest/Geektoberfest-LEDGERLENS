@@ -1,6 +1,6 @@
-"""LEDGERLENS Anomaly Detection Model and Data Processing.
+"""LEDGERLENS Anomaly Detection Model and Feature Engineering.
 
-This module provides data loading, sanitization, and baseline feature extraction.
+This module provides data loading, sanitization, and engineered project indicators.
 """
 from pathlib import Path
 from typing import Dict, List, Optional, Union
@@ -22,24 +22,21 @@ BASELINE_FEATURES = [
     "spend_vs_progress",
 ]
 
-FEATURES = BASELINE_FEATURES
+# Core improved indicators (Issue #2): true budget burn, unclipped slippage, and idle parked funds
+CORE_IMPROVED_FEATURES = [
+    "cost_overrun",
+    "budget_burn_vs_progress",
+    "schedule_slippage",
+    "idle_funds_ratio",
+    "fund_utilisation",
+    "funds_released_ratio",
+]
+
+FEATURES = CORE_IMPROVED_FEATURES
 
 
 def load_data(filepath: Optional[Union[str, Path]] = None, sanitize: bool = True) -> pd.DataFrame:
-    """Load, validate, and sanitize project data with defensive denominator handling.
-
-    Parameters
-    ----------
-    filepath : str or Path, optional
-        Path to the project CSV. Defaults to sample_projects.csv.
-    sanitize : bool, default=True
-        Whether to explicitly sanitize missing, zero, and extreme values.
-
-    Returns
-    -------
-    pd.DataFrame
-        DataFrame with standardized columns and sanitized metrics.
-    """
+    """Load, validate, sanitize and compute core engineered features."""
     path = Path(filepath) if filepath else DATASET_PATH
     data = pd.read_csv(path)
 
@@ -93,23 +90,19 @@ def load_data(filepath: Optional[Union[str, Path]] = None, sanitize: bool = True
             data[col] = np.nan
 
     if sanitize:
-        # Handle non-positive or missing estimated costs
         est_valid = data["est_cost"].dropna()
         est_median = est_valid[est_valid > 0].median() if len(est_valid[est_valid > 0]) > 0 else 1.0
         data["est_cost"] = data["est_cost"].fillna(est_median).clip(lower=0.0)
 
-        # Actual costs and disbursements
         data["actual_cost"] = data["actual_cost"].fillna(data["est_cost"]).clip(lower=0.0)
         data["funds_released"] = data["funds_released"].fillna(0.0).clip(lower=0.0)
         data["funds_used"] = data["funds_used"].fillna(0.0).clip(lower=0.0)
 
-        # Planned and elapsed project durations
         planned_valid = data["planned_days"].dropna()
         planned_median = planned_valid[planned_valid > 0].median() if len(planned_valid[planned_valid > 0]) > 0 else 365.0
         data["planned_days"] = data["planned_days"].fillna(planned_median).clip(lower=1.0)
         data["elapsed_days"] = data["elapsed_days"].fillna(0.0).clip(lower=0.0)
 
-        # Normalize progress scale: if [0, 1.5], scale to percentage [0, 100]
         prog = data["progress_pct"].fillna(0.0)
         if prog.max(skipna=True) <= 1.5:
             prog = prog * 100.0
@@ -138,11 +131,30 @@ def load_data(filepath: Optional[Union[str, Path]] = None, sanitize: bool = True
     data["progress_vs_time"] = data["progress_pct"] / 100.0 - data["time_elapsed"].clip(upper=1.0)
     data["spend_vs_progress"] = data["fund_utilisation"] - data["progress_pct"] / 100.0
 
+    # Core improved indicators
+    data["budget_spent_ratio"] = (data["funds_used"] / safe_est_cost).fillna(0.0)
+    data["budget_burn_vs_progress"] = data["budget_spent_ratio"] - data["progress_pct"] / 100.0
+    data["schedule_slippage"] = data["progress_pct"] / 100.0 - data["time_elapsed"]
+
+    data["schedule_overrun"] = (data["elapsed_days"] - data["planned_days"]) / safe_planned_days
+    data["schedule_overrun"] = (
+        data["schedule_overrun"].replace([np.inf, -np.inf], np.nan).fillna(0.0).clip(lower=0.0)
+    )
+
+    data["idle_funds_ratio"] = ((data["funds_released"] - data["funds_used"]) / safe_est_cost).fillna(0.0)
+    data["fund_release_lead"] = data["funds_released_ratio"] - data["progress_pct"] / 100.0
+
+    # Bounded extreme values
+    data["cost_overrun"] = data["cost_overrun"].clip(-1.0, 10.0)
+    data["budget_burn_vs_progress"] = data["budget_burn_vs_progress"].clip(-2.0, 2.0)
+    data["schedule_slippage"] = data["schedule_slippage"].clip(-10.0, 2.0)
+    data["idle_funds_ratio"] = data["idle_funds_ratio"].clip(0.0, 2.0)
+
     return data.replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
 
 def run_anomaly_detection(contamination: float = 0.12, random_state: int = 42) -> Dict[str, object]:
-    """Execute baseline Isolation Forest anomaly detection."""
+    """Execute Isolation Forest anomaly detection."""
     data = load_data()
     scaler = StandardScaler()
     X = scaler.fit_transform(data[FEATURES])
@@ -154,20 +166,19 @@ def run_anomaly_detection(contamination: float = 0.12, random_state: int = 42) -
 
 
 def explain_project(row: pd.Series, data: pd.DataFrame) -> List[str]:
-    """Generate rule-based reasons for baseline flagged projects."""
+    """Generate explanations for flagged projects."""
     peers = data[data["sector"] == row["sector"]]
     reasons = []
     peer_cost = peers["cost_overrun"].median()
     peer_util = peers["fund_utilisation"].median()
-    peer_gap = peers["spend_vs_progress"].median()
     if row["cost_overrun"] > peer_cost + 0.15:
         reasons.append(f"Cost overrun is {row['cost_overrun']:.0%}, above the sector peer median of {peer_cost:.0%}.")
-    if row["fund_utilisation"] > peer_util + 0.15:
-        reasons.append(f"Fund utilisation is {row['fund_utilisation']:.0%}, above the sector peer median of {peer_util:.0%}.")
-    if row["spend_vs_progress"] > peer_gap + 0.20:
-        reasons.append("Spending is running ahead of reported physical progress.")
-    if row["progress_vs_time"] < -0.20:
-        reasons.append("Physical progress is materially behind the elapsed timeline.")
+    if row["budget_burn_vs_progress"] > 0.20:
+        reasons.append(f"Budget expenditure ({row['budget_spent_ratio']:.1%}) is running ahead of physical progress ({row['progress_pct']:.1f}%).")
+    if row["schedule_slippage"] < -0.20:
+        reasons.append(f"Physical progress ({row['progress_pct']:.1f}%) is severely lagging elapsed schedule.")
+    if row["idle_funds_ratio"] > 0.15:
+        reasons.append(f"High idle funds: {row['idle_funds_ratio']:.1%} of budget released but unutilised.")
     if not reasons and row.get("anomaly", 1) == -1:
         reasons.append("The combination of project metrics is unusual relative to the overall portfolio.")
     return reasons
