@@ -17,23 +17,47 @@ LEDGERLENS is a **screening tool, not a fraud or corruption detector**. An anoma
 ## What the prototype does
 
 - Overview and EDA dashboard
-- Isolation Forest anomaly detection
+- Isolation Forest anomaly detection with selectable feature sets
 - Review queue for flagged projects
-- Project-level anomaly explanations
+- Project-level anomaly explanations (peer-aware, evidence-backed)
 - Sector-aware peer comparisons
+- Side-by-side baseline vs improved feature comparison tab
 
 ## ML Pipeline
 
-Project data → Feature engineering → Standardization → Isolation Forest → Anomaly score → Human review
+```
+Project data → Sanitization → Feature engineering → StandardScaler
+    → Isolation Forest → Anomaly score → Human review
+```
 
-## Baseline Features
+## Feature Sets
 
-- Cost overrun
-- Fund utilisation
-- Funds released ratio
-- Time elapsed
-- Progress vs time
-- Spending vs progress
+The app supports two feature sets selectable from the sidebar:
+
+### ✨ Improved Feature Set (default — Issue #2)
+
+| Feature | Formula | Signal |
+|---|---|---|
+| `cost_overrun` | `(actual_cost − est_cost) / est_cost` | Absolute budget overrun |
+| `cost_overrun_peer_gap` | `cost_overrun − sector_median(cost_overrun)` | Overrun relative to sector peers |
+| `fund_util_peer_gap` | `fund_utilisation − sector_median(fund_utilisation)` | Absorption lag vs sector peers |
+| `budget_burn_vs_progress` | `(funds_used / est_cost) − (progress_pct / 100)` | True budget spend ahead of delivery |
+| `schedule_slippage` | `(progress_pct / 100) − (elapsed_days / planned_days)` | Unclipped schedule delay |
+| `idle_funds_ratio` | `(funds_released − funds_used) / est_cost` | Parked / unabsorbed public funds |
+
+### 📋 Baseline Feature Set (original prototype)
+
+| Feature | Signal |
+|---|---|
+| `cost_overrun` | Absolute budget overrun |
+| `fund_utilisation` | Tranche absorption rate |
+| `funds_released_ratio` | Funds released relative to estimate |
+| `time_elapsed` | Elapsed fraction of planned duration |
+| `progress_vs_time` | Progress lag (clipped at deadline) |
+| `spend_vs_progress` | Tranche spend vs progress (lifecycle-conflated) |
+
+For a detailed comparison of both feature sets — including correlation analysis,
+anomaly detection results, and limitations — see [`docs/feature_engineering_report.md`](docs/feature_engineering_report.md).
 
 ## Dataset
 
@@ -48,6 +72,13 @@ Python • Pandas • NumPy • scikit-learn • Isolation Forest • Streamlit 
 ```bash
 python -m pip install -r requirements.txt
 python -m streamlit run app.py
+```
+
+## Run tests
+
+```bash
+python -m pytest tests/ -v
+# 33 tests: 3 original smoke tests + 30 feature-engineering tests
 ```
 
 ## Competition Workflow
@@ -74,14 +105,18 @@ Anomalies are candidates for human review, not proof of fraud or misconduct. Sin
 
 ```
 LEDGERLENS/
-├── app.py
-├── model.py
-├── sample_projects.csv
+├── app.py                          # Streamlit UI (feature-set toggle, comparison tab)
+├── model.py                        # Data loading, feature engineering, Isolation Forest
+├── sample_projects.csv             # 260-project synthetic dataset
 ├── requirements.txt
 ├── CONTRIBUTING.md
 ├── PRESENTATION.md
 ├── LICENSE
 ├── .gitignore
+├── docs/
+│   ├── baseline_report.md          # Issue #1 audit baseline results
+│   └── feature_engineering_report.md  # Issue #2 feature comparison report
 └── tests/
-    └── test_model.py
+    ├── test_model.py               # 3 original smoke tests
+    └── test_feature_engineering.py # 30 feature-engineering tests (Issue #2)
 ```
