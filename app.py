@@ -1,8 +1,8 @@
 import streamlit as st
 import pandas as pd
-from model import run_anomaly_detection, explain_project
+from model import run_anomaly_detection, explain_project, BASELINE_FEATURES, IMPROVED_FEATURES
 
-st.set_page_config(page_title="LEDGERLENS",page_icon="🔎",layout="wide")
+st.set_page_config(page_title="LEDGERLENS", page_icon="🔎", layout="wide")
 st.markdown("""
 <style>
 .stApp{background:radial-gradient(circle at top left,#e6f4f1 0,#f7f8f4 38%,#eef2f3 100%);color:#17212b}
@@ -31,74 +31,243 @@ h1,h2,h3,h4{color:#17343b!important}
 .stTabs [role="tab"][aria-selected="true"]{color:#0f766e!important;opacity:1!important}
 .stTabs [role="tab"][aria-selected="true"] *{color:#0f766e!important;opacity:1!important}
 .stTabs [data-baseweb="tab-highlight"]{background:#0f766e!important}
-
+.feature-pill{display:inline-block;background:#d1fae5;color:#065f46;border-radius:99px;font-size:.72rem;font-weight:600;padding:.15rem .65rem;margin:.1rem .15rem .1rem 0;border:1px solid #a7f3d0}
+.feature-pill-base{background:#fef3c7;color:#92400e;border:1px solid #fde68a}
 </style>
-""",unsafe_allow_html=True)
+""", unsafe_allow_html=True)
+
 st.markdown("""
 <div class="hero">
 <div class="hero-kicker">CIVIC AUDIT INTELLIGENCE</div>
 <div class="hero-title">🔎 LEDGERLENS</div>
 <div class="hero-subtitle">Spot unusual cost, spending and timeline behaviour before deeper review.</div>
 </div>
-""",unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
+# ---------------------------------------------------------------------------
+# Sidebar: feature-set selector
+# ---------------------------------------------------------------------------
+with st.sidebar:
+    st.markdown("## ⚙️ Detector Settings")
+    feature_set = st.radio(
+        "Feature Set",
+        options=["improved", "baseline"],
+        format_func=lambda x: "✨ Improved (Issue #2)" if x == "improved" else "📋 Baseline (original)",
+        index=0,
+        help=(
+            "**Improved** uses peer-normalized and unclipped indicators.\n\n"
+            "**Baseline** uses the original 6 prototype features."
+        ),
+    )
+    active_features = IMPROVED_FEATURES if feature_set == "improved" else BASELINE_FEATURES
+    pill_class = "feature-pill" if feature_set == "improved" else "feature-pill feature-pill-base"
+    pills_html = "".join(f'<span class="{pill_class}">{f}</span>' for f in active_features)
+    st.markdown(f"**Active features ({len(active_features)}):**", unsafe_allow_html=False)
+    st.markdown(pills_html, unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.caption(
+        "LEDGERLENS is a screening tool. An anomaly flags a project for "
+        "closer human review — it does not prove wrongdoing."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Load results (cached per feature_set selection)
+# ---------------------------------------------------------------------------
 @st.cache_data
-def get_results():
-    return run_anomaly_detection()
+def get_results(fs: str):
+    return run_anomaly_detection(feature_set=fs)
 
-results=get_results()
-data=results["data"]
-a,b,c,d=st.columns(4)
-a.metric("Projects",f"{len(data):,}")
-b.metric("Anomalies",f"{int((data['anomaly']==-1).sum()):,}")
-c.metric("Avg Utilisation",f"{data['fund_utilisation'].mean():.1%}")
-d.metric("Detector","Isolation Forest")
+
+results = get_results(feature_set)
+data = results["data"]
+
+# ---------------------------------------------------------------------------
+# KPI strip
+# ---------------------------------------------------------------------------
+a, b, c, d = st.columns(4)
+a.metric("Projects", f"{len(data):,}")
+b.metric("Flagged for Review", f"{int((data['anomaly'] == -1).sum()):,}")
+c.metric("Avg Fund Utilisation", f"{data['fund_utilisation'].mean():.1%}")
+d.metric("Detector", "Isolation Forest")
 st.divider()
 
-overview,review,details=st.tabs(["Overview","Review Queue","Project Details"])
+# ---------------------------------------------------------------------------
+# Tabs
+# ---------------------------------------------------------------------------
+overview, review, details, compare = st.tabs(
+    ["Overview", "Review Queue", "Project Details", "Feature Comparison"]
+)
+
 with overview:
     st.subheader("Project Overview")
-    left,right=st.columns(2)
+    left, right = st.columns(2)
     with left:
         st.markdown("### Sector Distribution")
         st.bar_chart(data["sector"].value_counts())
     with right:
         st.markdown("### Anomaly Score Distribution")
-        hist=pd.cut(data["anomaly_score"],bins=10).value_counts().sort_index()
-        hist.index=hist.index.astype(str)
+        hist = pd.cut(data["anomaly_score"], bins=10).value_counts().sort_index()
+        hist.index = hist.index.astype(str)
         st.bar_chart(hist)
-    st.markdown("### Spending vs Progress")
-    chart_data=data.assign(fund_utilisation_pct=data["fund_utilisation"]*100)
-    st.scatter_chart(chart_data,x="fund_utilisation_pct",y="progress_pct",color="sector")
+
+    st.markdown("### Budget Burn vs Physical Progress")
+    if feature_set == "improved":
+        chart_data = data.assign(
+            budget_burn_pct=data["budget_burn_vs_progress"] * 100
+        )
+        st.scatter_chart(
+            chart_data, x="progress_pct", y="budget_burn_pct", color="sector",
+            x_label="Physical Progress (%)", y_label="Budget Burn Ahead of Progress (%)"
+        )
+        st.caption(
+            "Points above 0 % have spent more budget than physical progress warrants. "
+            "Points below 0 % indicate physical progress outpacing expenditure."
+        )
+    else:
+        chart_data = data.assign(fund_utilisation_pct=data["fund_utilisation"] * 100)
+        st.scatter_chart(
+            chart_data, x="fund_utilisation_pct", y="progress_pct", color="sector"
+        )
 
 with review:
     st.subheader("Projects Flagged for Review")
-    flagged=data[data["anomaly"]==-1].sort_values("anomaly_score").copy()
-    st.caption("Lower anomaly scores indicate stronger model-level evidence of unusual behaviour.")
-    cols=["id","name","sector","district","est_cost","actual_cost","fund_utilisation","progress_pct","anomaly_score"]
-    st.dataframe(flagged[cols].rename(columns={"id":"Project","name":"Project Name","est_cost":"Estimated Cost","actual_cost":"Actual Cost","fund_utilisation":"Fund Utilisation","progress_pct":"Progress","anomaly_score":"Anomaly Score"}),use_container_width=True)
+    flagged = data[data["anomaly"] == -1].sort_values("anomaly_score").copy()
+    st.caption(
+        "Lower anomaly scores indicate stronger model-level evidence of unusual behaviour. "
+        f"Feature set: **{feature_set}**."
+    )
+    if feature_set == "improved":
+        cols = [
+            "id", "name", "sector", "district",
+            "est_cost", "actual_cost",
+            "budget_burn_vs_progress", "schedule_slippage",
+            "idle_funds_ratio", "cost_overrun_peer_gap",
+            "progress_pct", "anomaly_score",
+        ]
+        rename_map = {
+            "id": "Project", "name": "Project Name",
+            "est_cost": "Est. Cost", "actual_cost": "Actual Cost",
+            "budget_burn_vs_progress": "Budget Burn vs Progress",
+            "schedule_slippage": "Schedule Slippage",
+            "idle_funds_ratio": "Idle Funds Ratio",
+            "cost_overrun_peer_gap": "Cost Overrun Peer Gap",
+            "progress_pct": "Progress %", "anomaly_score": "Anomaly Score",
+        }
+    else:
+        cols = [
+            "id", "name", "sector", "district",
+            "est_cost", "actual_cost",
+            "fund_utilisation", "progress_pct", "anomaly_score",
+        ]
+        rename_map = {
+            "id": "Project", "name": "Project Name",
+            "est_cost": "Estimated Cost", "actual_cost": "Actual Cost",
+            "fund_utilisation": "Fund Utilisation",
+            "progress_pct": "Progress", "anomaly_score": "Anomaly Score",
+        }
+    st.dataframe(
+        flagged[cols].rename(columns=rename_map),
+        use_container_width=True,
+    )
 
 with details:
     st.subheader("Project Details")
-    project_id=st.selectbox("Select project",data["id"].tolist())
-    row=data[data["id"]==project_id].iloc[0]
+    project_id = st.selectbox("Select project", data["id"].tolist())
+    row = data[data["id"] == project_id].iloc[0]
     st.write(f"### {row['name']}")
     st.write(f"**Sector:** {row['sector']}  ·  **District:** {row['district']}")
-    cols=st.columns(4)
-    cols[0].metric("Estimated Cost",f"₹{row['est_cost']:,.0f}")
-    cols[1].metric("Actual Cost",f"₹{row['actual_cost']:,.0f}")
-    cols[2].metric("Fund Utilisation",f"{row['fund_utilisation']:.1%}")
-    cols[3].metric("Progress",f"{row['progress_pct']:.1f}%")
-    if row["anomaly"]==-1:
-        st.error("Flagged for review by the baseline detector.")
+
+    cols = st.columns(4)
+    cols[0].metric("Estimated Cost", f"₹{row['est_cost']:,.0f}")
+    cols[1].metric("Actual Cost", f"₹{row['actual_cost']:,.0f}")
+    cols[2].metric("Fund Utilisation", f"{row['fund_utilisation']:.1%}")
+    cols[3].metric("Progress", f"{row['progress_pct']:.1f}%")
+
+    if row["anomaly"] == -1:
+        st.error("🚩 Flagged for review by the anomaly detector.")
     else:
-        st.success("Not flagged by the baseline detector.")
+        st.success("✅ Not flagged by the anomaly detector.")
+
     st.markdown("### Why was it flagged?")
-    reasons=explain_project(row,data)
+    reasons = explain_project(row, data, feature_set=feature_set)
     if reasons:
-        for reason in reasons: st.warning(reason)
+        for reason in reasons:
+            st.warning(reason)
     else:
         st.info("No strong rule-based signal was found for this project.")
+
     st.markdown("### Project Metrics")
-    metric_cols=["est_cost","actual_cost","funds_released","funds_used","planned_days","elapsed_days","progress_pct","cost_overrun","fund_utilisation","funds_released_ratio","time_elapsed","progress_vs_time","spend_vs_progress"]
-    st.dataframe(row[metric_cols].to_frame("Value"),use_container_width=True)
+    if feature_set == "improved":
+        metric_cols = [
+            "est_cost", "actual_cost", "funds_released", "funds_used",
+            "planned_days", "elapsed_days", "progress_pct",
+            "cost_overrun", "cost_overrun_peer_gap",
+            "fund_utilisation", "fund_util_peer_gap",
+            "budget_spent_ratio", "budget_burn_vs_progress",
+            "schedule_slippage", "schedule_overrun",
+            "idle_funds_ratio", "fund_release_lead",
+        ]
+    else:
+        metric_cols = [
+            "est_cost", "actual_cost", "funds_released", "funds_used",
+            "planned_days", "elapsed_days", "progress_pct",
+            "cost_overrun", "fund_utilisation", "funds_released_ratio",
+            "time_elapsed", "progress_vs_time", "spend_vs_progress",
+        ]
+    st.dataframe(row[metric_cols].to_frame("Value"), use_container_width=True)
+
+with compare:
+    st.subheader("Baseline vs Improved Features — Side-by-Side")
+    st.caption(
+        "Runs both detectors simultaneously so you can compare which projects "
+        "each feature set flags and why the improved indicators provide richer signals."
+    )
+
+    @st.cache_data
+    def get_both_results():
+        base = run_anomaly_detection(feature_set="baseline")
+        impr = run_anomaly_detection(feature_set="improved")
+        return base, impr
+
+    base_res, impr_res = get_both_results()
+    base_flagged = set(base_res["data"][base_res["data"]["anomaly"] == -1]["id"])
+    impr_flagged = set(impr_res["data"][impr_res["data"]["anomaly"] == -1]["id"])
+
+    only_base = base_flagged - impr_flagged
+    only_impr = impr_flagged - base_flagged
+    both = base_flagged & impr_flagged
+
+    col_a, col_b, col_c = st.columns(3)
+    col_a.metric("Flagged by Both", len(both))
+    col_b.metric("Only Baseline flags", len(only_base))
+    col_c.metric("Only Improved flags", len(only_impr))
+
+    st.markdown("#### Projects flagged only by the Improved detector")
+    st.caption("These are projects the baseline missed that better features expose.")
+    if only_impr:
+        impr_data = impr_res["data"]
+        subset = impr_data[impr_data["id"].isin(only_impr)].sort_values("anomaly_score")
+        st.dataframe(
+            subset[["id", "name", "sector", "district",
+                    "budget_burn_vs_progress", "schedule_slippage",
+                    "idle_funds_ratio", "cost_overrun_peer_gap", "anomaly_score"]],
+            use_container_width=True,
+        )
+    else:
+        st.info("No projects are uniquely flagged by the improved detector.")
+
+    st.markdown("#### Projects flagged only by the Baseline detector")
+    st.caption("These projects lose their anomaly flag with peer-normalized features.")
+    if only_base:
+        base_data = base_res["data"]
+        subset = base_data[base_data["id"].isin(only_base)].sort_values("anomaly_score")
+        st.dataframe(
+            subset[["id", "name", "sector", "district",
+                    "cost_overrun", "fund_utilisation",
+                    "progress_vs_time", "spend_vs_progress", "anomaly_score"]],
+            use_container_width=True,
+        )
+    else:
+        st.info("No projects are uniquely flagged by the baseline detector.")
