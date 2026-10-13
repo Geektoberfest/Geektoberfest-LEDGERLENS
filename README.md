@@ -83,6 +83,7 @@ Anomalies are candidates for human review, not proof of fraud or misconduct. Sin
 ```
 LEDGERLENS/
 ├── app.py
+├── baseline_audit.py
 ├── model.py
 ├── sample_projects.csv
 ├── requirements.txt
@@ -90,6 +91,10 @@ LEDGERLENS/
 ├── PRESENTATION.md
 ├── LICENSE
 ├── .gitignore
+├── docs/
+│   ├── baseline_flagged_projects.csv
+│   └── baseline_report.md
 └── tests/
+    ├── test_baseline_audit.py
     └── test_model.py
 ```
