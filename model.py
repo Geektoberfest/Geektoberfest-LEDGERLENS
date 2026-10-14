@@ -33,8 +33,24 @@ IMPROVED_FEATURES = [
     "idle_funds_ratio",
 ]
 
-# Default to improved features while maintaining FEATURES alias for backward compatibility
-FEATURES = IMPROVED_FEATURES
+# Alias for backward compatibility with baseline scripts (baseline_audit.py, compare_methods.py)
+FEATURES = BASELINE_FEATURES
+
+SIZE_BANDS = ["Small", "Medium", "Large"]
+MIN_PEERS = 8
+Z_THRESHOLD = 2
+
+# Evidence specifications for explanations
+# concern: +1 if a high value is a warning sign, -1 if a low value is, 0 for context only
+# min_gap: smallest difference from the peer median (in fraction units) worth explaining
+SIGNALS = {
+    "cost_overrun": {"label": "Cost overrun (actual vs estimated cost)", "kind": "share", "concern": 1, "min_gap": 0.10},
+    "fund_utilisation": {"label": "Share of released funds spent", "kind": "share", "concern": 1, "min_gap": 0.10},
+    "funds_released_ratio": {"label": "Share of estimated cost released", "kind": "share", "concern": 0, "min_gap": 0.15},
+    "time_elapsed": {"label": "Share of planned time elapsed", "kind": "share", "concern": 1, "min_gap": 0.15},
+    "progress_vs_time": {"label": "Physical progress relative to time elapsed", "kind": "gap", "concern": -1, "min_gap": 0.15},
+    "spend_vs_progress": {"label": "Fund use relative to physical progress", "kind": "gap", "concern": 1, "min_gap": 0.15},
+}
 
 
 def load_data(filepath: Optional[Union[str, Path]] = None, sanitize: bool = True) -> pd.DataFrame:
@@ -160,6 +176,11 @@ def load_data(filepath: Optional[Union[str, Path]] = None, sanitize: bool = True
     # 6. Spend vs progress (baseline subtracts progress from tranche absorption)
     data["spend_vs_progress"] = data["fund_utilisation"] - data["progress_pct"] / 100.0
 
+    # Size band for peer comparison (grouped by sector)
+    data["size_band"] = data.groupby("sector")["est_cost"].transform(
+        lambda s: pd.qcut(s.rank(method="first"), 3, labels=SIZE_BANDS)
+    ).astype(str)
+
     # =========================================================================
     # REVISED / IMPROVED INDICATORS (Issue #2)
     # =========================================================================
@@ -216,7 +237,7 @@ def load_data(filepath: Optional[Union[str, Path]] = None, sanitize: bool = True
 
 def run_anomaly_detection(
     contamination: float = 0.12,
-    feature_set: Union[str, List[str]] = "improved",
+    feature_set: Union[str, List[str]] = "baseline",
     data: Optional[pd.DataFrame] = None,
     random_state: int = 42,
 ) -> Dict[str, object]:
@@ -226,7 +247,7 @@ def run_anomaly_detection(
     ----------
     contamination : float, default=0.12
         Expected proportion of anomalies in the dataset.
-    feature_set : str or list of str, default="improved"
+    feature_set : str or list of str, default="baseline"
         "improved" for revised feature set, "baseline" for original 6 features,
         or an explicit list of feature column names.
     data : pd.DataFrame, optional
@@ -252,7 +273,7 @@ def run_anomaly_detection(
     elif isinstance(feature_set, (list, tuple)):
         features = list(feature_set)
     else:
-        features = list(IMPROVED_FEATURES)
+        features = list(BASELINE_FEATURES)
 
     scaler = StandardScaler()
     X = scaler.fit_transform(df[features])
@@ -274,10 +295,69 @@ def run_anomaly_detection(
     }
 
 
+def format_signal(key: str, value: float) -> str:
+    """Format signal value for presentation."""
+    if SIGNALS[key]["kind"] == "share":
+        return f"{value:.0%}"
+    return f"{value * 100:.0f} points"
+
+
+def robust_z(value: float, peer_values: pd.Series) -> float:
+    """Compute robust z-score using median and MAD."""
+    median = peer_values.median()
+    spread = 1.4826 * (peer_values - median).abs().median()
+    if spread == 0 or np.isnan(spread):
+        spread = peer_values.std()
+    if spread == 0 or np.isnan(spread):
+        return 0.0
+    return (value - median) / spread
+
+
+def peer_group(row: pd.Series, data: pd.DataFrame):
+    """Find peer projects matching sector and size band."""
+    others = data[data["id"] != row["id"]]
+    sector_peers = others[others["sector"] == row["sector"]]
+    band_peers = sector_peers[sector_peers["size_band"] == row["size_band"]]
+    if len(band_peers) >= MIN_PEERS:
+        return band_peers, f"{row['sector']} projects of {row['size_band'].lower()} size"
+    return sector_peers, f"{row['sector']} projects"
+
+
+def build_evidence(row: pd.Series, data: pd.DataFrame) -> Dict[str, object]:
+    """Build peer-evidence breakdown for project signals."""
+    peers, label = peer_group(row, data)
+    signals = []
+    for key, spec in SIGNALS.items():
+        observed = row[key]
+        peer_median = peers[key].median()
+        gap = observed - peer_median
+        z = robust_z(observed, peers[key])
+        notable = (
+            spec["concern"] != 0
+            and np.sign(gap) == spec["concern"]
+            and abs(z) >= Z_THRESHOLD
+            and abs(gap) >= spec["min_gap"]
+        )
+        signals.append({
+            "key": key,
+            "label": spec["label"],
+            "observed": observed,
+            "peer_median": peer_median,
+            "gap": gap,
+            "z": z,
+            "notable": bool(notable),
+        })
+    return {
+        "peer_label": label,
+        "peer_count": len(peers),
+        "signals": sorted(signals, key=lambda s: -abs(s["z"])),
+    }
+
+
 def explain_project(
     row: pd.Series,
     data: pd.DataFrame,
-    feature_set: str = "improved",
+    feature_set: str = "baseline",
 ) -> List[str]:
     """Generate evidence-based civic audit explanations for a project row.
 
@@ -287,7 +367,7 @@ def explain_project(
         Single project row from scored DataFrame.
     data : pd.DataFrame
         Full dataset for peer comparison calculations.
-    feature_set : str, default="improved"
+    feature_set : str, default="baseline"
         Whether to generate explanations using "improved" or "baseline" logic.
 
     Returns
@@ -295,27 +375,10 @@ def explain_project(
     list of str
         Human-readable diagnostic reasons highlighting specific project deviations.
     """
-    peers = data[data["sector"] == row["sector"]]
-    reasons = []
+    if feature_set == "improved":
+        peers = data[data["sector"] == row["sector"]]
+        reasons = []
 
-    if feature_set == "baseline":
-        peer_cost = peers["cost_overrun"].median()
-        peer_util = peers["fund_utilisation"].median()
-        peer_gap = peers["spend_vs_progress"].median()
-
-        if row["cost_overrun"] > peer_cost + 0.15:
-            reasons.append(
-                f"Cost overrun is {row['cost_overrun']:.0%}, above the sector peer median of {peer_cost:.0%}."
-            )
-        if row["fund_utilisation"] > peer_util + 0.15:
-            reasons.append(
-                f"Fund utilisation is {row['fund_utilisation']:.0%}, above the sector peer median of {peer_util:.0%}."
-            )
-        if row["spend_vs_progress"] > peer_gap + 0.20:
-            reasons.append("Spending is running ahead of reported physical progress.")
-        if row["progress_vs_time"] < -0.20:
-            reasons.append("Physical progress is materially behind the elapsed timeline.")
-    else:
         peer_cost = peers["cost_overrun"].median()
         peer_util = peers["fund_utilisation"].median()
 
@@ -367,10 +430,37 @@ def explain_project(
                 f"sector peer median ({peer_util:.1%}) by {util_gap:.1%}."
             )
 
+        if not reasons and row.get("anomaly", 1) == -1:
+            reasons.append(
+                "Multivariate anomaly: The combination of project metrics is unusual "
+                "relative to the overall portfolio."
+            )
+
+        return reasons
+
+    # Baseline numerical evidence explanations
+    evidence = build_evidence(row, data)
+    reasons = []
+    for signal in evidence["signals"]:
+        if not signal["notable"]:
+            continue
+        key = signal["key"]
+        group = f"{evidence['peer_label']} ({evidence['peer_count']} projects)"
+        observed = format_signal(key, signal["observed"])
+        peer_median = format_signal(key, signal["peer_median"])
+        if SIGNALS[key]["kind"] == "share":
+            direction = "above" if signal["gap"] > 0 else "below"
+            reasons.append(
+                f"{signal['label']} is {observed}, {abs(signal['gap']) * 100:.0f} points "
+                f"{direction} the peer median of {peer_median} for {group}."
+            )
+        else:
+            reasons.append(
+                f"{signal['label']} is {observed}, against a peer median of {peer_median} for {group}."
+            )
     if not reasons and row.get("anomaly", 1) == -1:
         reasons.append(
-            "Multivariate anomaly: The combination of project metrics is unusual "
-            "relative to the overall portfolio."
+            "No single signal stands out against comparable projects, but the combination of "
+            "metrics is unusual relative to the overall portfolio."
         )
-
     return reasons

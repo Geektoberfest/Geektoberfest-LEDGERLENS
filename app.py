@@ -1,6 +1,13 @@
 import streamlit as st
 import pandas as pd
-from model import run_anomaly_detection, explain_project, BASELINE_FEATURES, IMPROVED_FEATURES
+from model import (
+    BASELINE_FEATURES,
+    IMPROVED_FEATURES,
+    build_evidence,
+    explain_project,
+    format_signal,
+    run_anomaly_detection,
+)
 
 st.set_page_config(page_title="LEDGERLENS", page_icon="🔎", layout="wide")
 st.markdown("""
@@ -134,10 +141,7 @@ with overview:
 with review:
     st.subheader("Projects Flagged for Review")
     flagged = data[data["anomaly"] == -1].sort_values("anomaly_score").copy()
-    st.caption(
-        "Lower anomaly scores indicate stronger model-level evidence of unusual behaviour. "
-        f"Feature set: **{feature_set}**."
-    )
+    st.caption("Lower anomaly scores indicate stronger model-level evidence of unusual behaviour. Flags are statistical screening results for review, not findings of misconduct.")
     if feature_set == "improved":
         cols = [
             "id", "name", "sector", "district",
@@ -191,12 +195,32 @@ with details:
         st.success("✅ Not flagged by the anomaly detector.")
 
     st.markdown("### Why was it flagged?")
+    st.info("These are statistical comparisons with similar projects. They show unusual behaviour that merits review. They are not evidence of misconduct.")
+    evidence = build_evidence(row, data)
+    st.caption(f"Compared with {evidence['peer_label']} ({evidence['peer_count']} projects, excluding this one).")
     reasons = explain_project(row, data, feature_set=feature_set)
     if reasons:
         for reason in reasons:
             st.warning(reason)
     else:
-        st.info("No strong rule-based signal was found for this project.")
+        st.info("No signal stands out against comparable projects.")
+
+    st.markdown("### Evidence, ranked by unusualness")
+    st.dataframe(
+        pd.DataFrame([
+            {
+                "Signal": s["label"],
+                "Project value": format_signal(s["key"], s["observed"]),
+                "Peer median": format_signal(s["key"], s["peer_median"]),
+                "Robust z-score": round(s["z"], 2),
+                "Counts as a warning": "Yes" if s["notable"] else "No",
+            }
+            for s in evidence["signals"]
+        ]),
+        use_container_width=True,
+        hide_index=True,
+    )
+    st.caption("Robust z-score: how many typical peer spreads the project sits from the peer median. Values of 2 or more are treated as unusual.")
 
     st.markdown("### Project Metrics")
     if feature_set == "improved":

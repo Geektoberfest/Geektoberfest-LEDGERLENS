@@ -74,11 +74,19 @@ python -m pip install -r requirements.txt
 python -m streamlit run app.py
 ```
 
+## Baseline audit
+
+`baseline_audit.py` reproduces the current Isolation Forest baseline and writes `docs/baseline_report.md` (anomaly count/rate, flagged vs unflagged features, representative cases, seed and contamination sensitivity, limitations) plus `docs/baseline_flagged_projects.csv`. It does not change the detector.
+
+```bash
+python baseline_audit.py
+```
+
 ## Run tests
 
 ```bash
 python -m pytest tests/ -v
-# 33 tests: 3 original smoke tests + 30 feature-engineering tests
+# 52 tests covering baseline audit, method comparison, explanations, feature engineering, and model
 ```
 
 ## Competition Workflow
@@ -106,6 +114,10 @@ Anomalies are candidates for human review, not proof of fraud or misconduct. Sin
 ```
 LEDGERLENS/
 ├── app.py                          # Streamlit UI (feature-set toggle, comparison tab)
+├── baseline_audit.py               # Issue #1 baseline audit script
+├── compare_methods.py              # Issue #4 anomaly detection method comparison
+├── evaluate_features.py            # Issue #2 feature set evaluation script
+├── features.py                     # Issue #2 ratio & peer feature engineering
 ├── model.py                        # Data loading, feature engineering, Isolation Forest
 ├── sample_projects.csv             # 260-project synthetic dataset
 ├── requirements.txt
@@ -114,9 +126,14 @@ LEDGERLENS/
 ├── LICENSE
 ├── .gitignore
 ├── docs/
-│   ├── baseline_report.md          # Issue #1 audit baseline results
+│   ├── baseline_flagged_projects.csv  # Flagged baseline projects
+│   ├── baseline_report.md             # Issue #1 audit baseline report
 │   └── feature_engineering_report.md  # Issue #2 feature comparison report
 └── tests/
-    ├── test_model.py               # 3 original smoke tests
-    └── test_feature_engineering.py # 30 feature-engineering tests (Issue #2)
+    ├── test_baseline_audit.py         # Baseline audit tests
+    ├── test_compare_methods.py        # Method comparison tests
+    ├── test_explanations.py           # Anomaly explanation tests
+    ├── test_feature_engineering.py    # 30 feature-engineering tests (Issue #2)
+    ├── test_features.py               # Features module tests
+    └── test_model.py                  # Core model smoke tests
 ```
